@@ -336,18 +336,45 @@ RCT_REMAP_METHOD(takePicture,
             NSMutableDictionary *response = [[NSMutableDictionary alloc] init];
             float quality = [options[@"quality"] floatValue];
             NSString *path = [RNFileSystem generatePathInDirectory:[[RNFileSystem cacheDirectoryPath] stringByAppendingPathComponent:@"Camera"] withExtension:@".jpg"];
-            CGSize image = CGSizeMake(200, 200)];
-            UIImage *generatedPhoto = [RNImageUtils generatePhotoOfSize:image];
+            UIImage *generatedPhoto = [RNImageUtils generatePhotoOfSize:CGSizeMake(200, 200)];
             BOOL useFastMode = options[@"fastMode"] && [options[@"fastMode"] boolValue];
             if (useFastMode) {
                 resolve(nil);
             }
 
             [view onPictureTaken:@{}];
+             // start ui image to pixel buffer convert
+            CGSize size = generatedPhoto.size;
+            CGImageRef image = [generatedPhoto CGImage];
+
+            NSDictionary *optionss = [NSDictionary dictionaryWithObjectsAndKeys:
+                                     [NSNumber numberWithBool:YES], kCVPixelBufferCGImageCompatibilityKey,
+                                     [NSNumber numberWithBool:YES], kCVPixelBufferCGBitmapContextCompatibilityKey, nil];
+            CVPixelBufferRef pxbuffer = NULL;
+            CVReturn status = CVPixelBufferCreate(kCFAllocatorDefault, size.width, size.height, kCVPixelFormatType_32ARGB, (__bridge CFDictionaryRef) optionss, &pxbuffer);
+
+            NSParameterAssert(status == kCVReturnSuccess && pxbuffer != NULL);
+
+            CVPixelBufferLockBaseAddress(pxbuffer, 0);
+            void *pxdata = CVPixelBufferGetBaseAddress(pxbuffer);
+            NSParameterAssert(pxdata != NULL);
+
+            CGColorSpaceRef rgbColorSpace = CGColorSpaceCreateDeviceRGB();
+            CGContextRef context = CGBitmapContextCreate(pxdata, size.width, size.height, 8, 4*size.width, rgbColorSpace, kCGImageAlphaPremultipliedFirst);
+            NSParameterAssert(context);
+
+            CGContextDrawImage(context, CGRectMake(0, 0, CGImageGetWidth(image), CGImageGetHeight(image)), image);
+
+            CGColorSpaceRelease(rgbColorSpace);
+            CGContextRelease(context);
+
+            CVPixelBufferUnlockBaseAddress(pxbuffer, 0);
+            // end
 
             // get image metadata so we can re-add it later
             // make it mutable since we need to adjust quality/compression
-            CFDictionaryRef metaDict = CMCopyDictionaryOfAttachments(NULL, image, kCMAttachmentMode_ShouldPropagate);
+
+            CFDictionaryRef metaDict = CMCopyDictionaryOfAttachments(NULL,pxbuffer , kCMAttachmentMode_ShouldPropagate);
 
             CFMutableDictionaryRef mutableMetaDict = CFDictionaryCreateMutableCopy(NULL, 0, metaDict);
 
@@ -360,16 +387,7 @@ RCT_REMAP_METHOD(takePicture,
 
 
             // Get final JPEG image and set compression
-            float quality = [options[@"quality"] floatValue];
             [metadata setObject:@(quality) forKey:(__bridge NSString *)kCGImageDestinationLossyCompressionQuality];
-
-            // Reset exif orientation if we need to due to image changes
-            // that already rotate the image.
-            // Other dimension attributes will be set automatically
-            // regardless of what we have on our metadata dict
-            if (resetOrientation){
-                metadata[(NSString*)kCGImagePropertyOrientation] = @(1);
-            }
 
             bool writeExif = true;
 
