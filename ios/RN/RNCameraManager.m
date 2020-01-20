@@ -336,13 +336,40 @@ RCT_REMAP_METHOD(takePicture,
             NSMutableDictionary *response = [[NSMutableDictionary alloc] init];
             float quality = [options[@"quality"] floatValue];
             NSString *path = [RNFileSystem generatePathInDirectory:[[RNFileSystem cacheDirectoryPath] stringByAppendingPathComponent:@"Camera"] withExtension:@".jpg"];
-            UIImage *generatedPhoto = [RNImageUtils generatePhotoOfSize:CGSizeMake(200, 200)];
+            CGSize image = CGSizeMake(200, 200)];
+            UIImage *generatedPhoto = [RNImageUtils generatePhotoOfSize:image];
             BOOL useFastMode = options[@"fastMode"] && [options[@"fastMode"] boolValue];
             if (useFastMode) {
                 resolve(nil);
             }
 
             [view onPictureTaken:@{}];
+
+            // get image metadata so we can re-add it later
+            // make it mutable since we need to adjust quality/compression
+            CFDictionaryRef metaDict = CMCopyDictionaryOfAttachments(NULL, image, kCMAttachmentMode_ShouldPropagate);
+
+            CFMutableDictionaryRef mutableMetaDict = CFDictionaryCreateMutableCopy(NULL, 0, metaDict);
+
+            // release the meta dict now that we've copied it
+            // to Objective-C land
+            CFRelease(metaDict);
+
+            // bridge the copy for auto release
+            NSMutableDictionary *metadata = (NSMutableDictionary *)CFBridgingRelease(mutableMetaDict);
+
+
+            // Get final JPEG image and set compression
+            float quality = [options[@"quality"] floatValue];
+            [metadata setObject:@(quality) forKey:(__bridge NSString *)kCGImageDestinationLossyCompressionQuality];
+
+            // Reset exif orientation if we need to due to image changes
+            // that already rotate the image.
+            // Other dimension attributes will be set automatically
+            // regardless of what we have on our metadata dict
+            if (resetOrientation){
+                metadata[(NSString*)kCGImagePropertyOrientation] = @(1);
+            }
 
             bool writeExif = true;
 
